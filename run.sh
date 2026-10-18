@@ -4,10 +4,9 @@
 # Runs local HTTP/SSE bridge daemon alongside caffeinate
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PID_FILE="$SCRIPT_DIR/web_dashboard.pid"
 LOG_FILE="$SCRIPT_DIR/web_dashboard.log"
-PORT=3847
+PORT=${PORT:-3847}
 
 get_local_ip() {
     ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "localhost"
@@ -25,24 +24,26 @@ start_dashboard() {
         fi
     fi
 
-    # 2. Ensure caffeinate is running
-    if ! pgrep -x "caffeinate" > /dev/null; then
-        echo "☕ Starting caffeinate sleep inhibitor..."
-        caffeinate -dimsu &
-    else
-        echo "☕ caffeinate is already active."
+    # 2. Ensure caffeinate is running if on macOS
+    if [ "$(uname)" = "Darwin" ]; then
+        if ! pgrep -x "caffeinate" > /dev/null; then
+            echo "☕ Starting caffeinate sleep inhibitor..."
+            caffeinate -dimsu &
+        else
+            echo "☕ caffeinate is already active."
+        fi
     fi
 
     # 3. Start supervisor loop
     LOCAL_IP=$(get_local_ip)
     echo "🚀 Starting Antigravity Mobile Web Dashboard on port $PORT..."
     nohup bash -c "
-        cd '$WORKSPACE_ROOT'
+        cd '$SCRIPT_DIR'
         while true; do
-            echo '[$(date)] Starting web_bridge_server.mjs...' >> '$LOG_FILE'
-            PORT=$PORT node '$SCRIPT_DIR/web_bridge_server.mjs' >> '$LOG_FILE' 2>&1
+            echo '[$(date)] Starting server.mjs...' >> '$LOG_FILE'
+            PORT=$PORT node '$SCRIPT_DIR/server.mjs' >> '$LOG_FILE' 2>&1
             EXIT_CODE=\$?
-            echo '[$(date)] Server exited with code '\$EXIT_CODE'. Restarting in 2s...' >> '$LOG_FILE'
+            echo '[$(date)] Server exited with code '$EXIT_CODE'. Restarting in 2s...' >> '$LOG_FILE'
             sleep 2
         done
     " > /dev/null 2>&1 &
@@ -65,11 +66,11 @@ stop_dashboard() {
         echo "🛑 Stopping Mobile Dashboard (PID: $PID)..."
         kill "$PID" > /dev/null 2>&1 || true
         rm -f "$PID_FILE"
-        pkill -f "node.*web_bridge_server.mjs" > /dev/null 2>&1 || true
+        pkill -f "node.*antigravity-remote/server.mjs" > /dev/null 2>&1 || true
         echo "Mobile Dashboard stopped."
     else
         echo "No PID file found. Killing any rogue instances..."
-        pkill -f "node.*web_bridge_server.mjs" > /dev/null 2>&1 || true
+        pkill -f "node.*antigravity-remote/server.mjs" > /dev/null 2>&1 || true
         echo "Done."
     fi
 }
@@ -81,10 +82,12 @@ status_dashboard() {
             LOCAL_IP=$(get_local_ip)
             echo "🟢 Mobile Dashboard is RUNNING (PID: $PID)"
             echo "👉 Phone URL: http://$LOCAL_IP:$PORT"
-            if pgrep -x "caffeinate" > /dev/null; then
-                echo "☕ Caffeinate: Active (System Sleep Prevented)"
-            else
-                echo "⚠️ Caffeinate: Inactive"
+            if [ "$(uname)" = "Darwin" ]; then
+                if pgrep -x "caffeinate" > /dev/null; then
+                    echo "☕ Caffeinate: Active (System Sleep Prevented)"
+                else
+                    echo "⚠️ Caffeinate: Inactive"
+                fi
             fi
             echo ""
             tail -n 12 "$LOG_FILE"
@@ -110,7 +113,7 @@ case "$1" in
         status_dashboard
         ;;
     *)
-        echo "Usage: scratch/run_mobile_dashboard.sh {start|stop|restart|status}"
+        echo "Usage: ./run.sh {start|stop|restart|status}"
         exit 1
         ;;
 esac
