@@ -1,0 +1,15 @@
+{
+  "name": "antigravity-remote",
+  "version": "1.0.0",
+  "description": "Mobile Web Dashboard & PWA for Remote Antigravity Pair-Programming",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node test.mjs"
+  },
+  "keywords": ["antigravity", "pwa", "remote", "developer-tools"],
+  "author": "Rashid",
+  "license": "ISC"
+}

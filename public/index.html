@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0F19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Antigravity">
+  
+  <title>Antigravity Remote</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Glassmorphism Top Header -->
+    <header>
+      <div class="brand">
+        <img src="/icon.svg" alt="Antigravity" class="brand-icon">
+        <span class="brand-title">Antigravity</span>
+      </div>
+      <div class="connection-pill" id="conn-pill">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="conn-text">Connecting...</span>
+      </div>
+    </header>
+
+    <!-- Top Alert Banner for Interactive Decisions & Approvals -->
+    <div id="decision-banner">
+      <div class="banner-content">
+        <div class="banner-header">
+          <span>🔔</span>
+          <span id="banner-type-label">DECISION REQUIRED</span>
+        </div>
+        <div class="banner-question" id="banner-question-text">
+          Loading question...
+        </div>
+        <div class="banner-actions" id="banner-actions-container">
+          <!-- Dynamic Action Buttons injected via app.js -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content Views -->
+    <main>
+      <!-- View 1: Chat & Remote Console -->
+      <section id="view-chat" class="view-section active">
+        <div class="log-stream" id="log-stream">
+          <!-- Live activity logs injected here -->
+          <div class="log-card response">
+            <div class="log-meta">
+              <span>Antigravity Remote</span>
+              <span>Just now</span>
+            </div>
+            <div class="log-content">Connected to your Mac workstation. Tap any quick chip below or send a directive to pair-program.</div>
+          </div>
+        </div>
+
+        <div class="input-bar-container">
+          <div class="quick-chips">
+            <div class="chip" onclick="setQuickPrompt('AGY: check git status')">📊 Git Status</div>
+            <div class="chip" onclick="setQuickPrompt('AGY: run vitest')">🧪 Run Tests</div>
+            <div class="chip" onclick="setQuickPrompt('AGY: what is the current task status?')">📋 Task Status</div>
+          </div>
+          <form class="input-box" id="prompt-form" onsubmit="handleSendPrompt(event)">
+            <input 
+              type="text" 
+              id="prompt-input" 
+              class="prompt-input" 
+              placeholder="Directive (e.g. AGY: check test plan)..."
+              autocomplete="off"
+              autocorrect="off"
+            />
+            <button type="submit" class="send-btn" id="send-btn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- View 2: Interactive Implementation Plan -->
+      <section id="view-plan" class="view-section">
+        <div class="plan-container" id="plan-container">
+          <div class="plan-header-card">
+            <h2 class="plan-title" id="plan-display-title">No Active Plan</h2>
+            <div class="plan-path" id="plan-display-path">Run push-plan on Mac to load an interactive plan.</div>
+            <div class="plan-status-badge badge-reviewing" id="plan-status-badge">STANDBY</div>
+          </div>
+
+          <div id="plan-phases-list">
+            <!-- Dynamic Phases injected here -->
+          </div>
+        </div>
+
+        <div class="plan-actions-bar" id="plan-actions-bar">
+          <button class="btn btn-proceed" onclick="handlePlanAction('proceed')">
+            <span>🚀</span>
+            <span>Proceed & Implement</span>
+          </button>
+          <button class="btn btn-edit" onclick="openRevisionModal()">
+            <span>✏️</span>
+            <span>Revision</span>
+          </button>
+          <button class="btn btn-cancel" onclick="handlePlanAction('cancel')">
+            <span>🛑</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- View 3: System Health & Workstation Monitor -->
+      <section id="view-system" class="view-section">
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div class="plan-header-card">
+            <h3 style="margin-bottom: 8px;">Mac Workstation Status</h3>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+              <div>• <b>Network Host:</b> <span id="sys-host">10.0.0.195:3847</span></div>
+              <div>• <b>Caffeinate:</b> <span id="sys-caff" style="color: var(--success);">Active (Sleep Prevented)</span></div>
+              <div>• <b>Git Branch:</b> <span id="sys-git" style="color: var(--accent-primary);">main</span></div>
+            </div>
+          </div>
+
+          <div class="plan-header-card">
+            <h3 style="margin-bottom: 8px;">Quick Workstation Actions</h3>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+              <button class="btn btn-edit" style="justify-content: flex-start; padding: 12px;" onclick="sendQuickAction('AGY: check git status')">
+                <span>📊</span> <span>Check Git Status & Uncommitted Diffs</span>
+              </button>
+              <button class="btn btn-edit" style="justify-content: flex-start; padding: 12px;" onclick="sendQuickAction('AGY: run vitest')">
+                <span>🧪</span> <span>Run Full Vitest Suite (31 files)</span>
+              </button>
+              <button class="btn btn-edit" style="justify-content: flex-start; padding: 12px;" onclick="location.reload()">
+                <span>🔄</span> <span>Reload Mobile Dashboard</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav>
+      <div class="nav-item active" onclick="switchTab('chat')">
+        <span class="nav-icon">💬</span>
+        <span>Console</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('plan')">
+        <span class="nav-icon">📋</span>
+        <span>Plan</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('system')">
+        <span class="nav-icon">⚙️</span>
+        <span>System</span>
+      </div>
+    </nav>
+
+    <!-- Modal Sheet for Plan Comments & Revisions -->
+    <div class="modal-overlay" id="revision-modal" onclick="closeModalOnBg(event)">
+      <div class="modal-sheet">
+        <div class="modal-header">
+          <span class="modal-title">✏️ Add Plan Revision</span>
+          <button class="modal-close" onclick="closeRevisionModal()">&times;</button>
+        </div>
+        <textarea 
+          id="revision-textarea" 
+          class="modal-textarea" 
+          placeholder="Type your comment or clinical adjustment (e.g. In Phase 2, also add an icon toggle for surgery bags)..."
+        ></textarea>
+        <button class="btn btn-proceed" style="width: 100%;" onclick="submitRevisionComment()">
+          <span>Submit Revision to Mac</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
