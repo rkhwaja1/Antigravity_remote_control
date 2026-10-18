@@ -20,7 +20,7 @@ start_dashboard() {
             LOCAL_IP=$(get_local_ip)
             echo "⚡ Mobile Dashboard is already running (PID: $OLD_PID)."
             echo "👉 Open on your phone: http://$LOCAL_IP:$PORT"
-            exit 0
+            return 0
         fi
     fi
 
