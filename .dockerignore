@@ -2,3 +2,7 @@ node_modules
 .git
 *.log
 *.pid
+scratch/
+*.json
+!package.json
+!manifest.json

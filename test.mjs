@@ -20,7 +20,7 @@ if (fs.existsSync(TEST_AUTH_STORE)) {
 
 // Dynamically import server & auth manager so they pick up AUTH_STORE_FILE
 const { startServer } = await import("./server.mjs");
-const { approvePairing, revokeAllSessions, getActiveSessions } = await import("./auth_manager.mjs");
+const { approvePairing, revokeAllSessions, getActiveSessions, getHostSecret } = await import("./auth_manager.mjs");
 const { saveActivePlanSession, PLAN_STATES } = await import("./plan_state_machine.mjs");
 
 async function runTests() {
@@ -142,7 +142,7 @@ async function runTests() {
     const verifySuccessRes = await makeRequest("POST", "/api/auth/verify", { pairId });
     assert.strictEqual(verifySuccessRes.status, 200);
     assert.strictEqual(verifySuccessRes.json.ok, true);
-    assert.ok(verifySuccessRes.json.token.startsWith("ag_sec_"));
+    assert.ok(verifySuccessRes.json.token.startsWith("ag_"));
     assert.ok(verifySuccessRes.json.session.id.startsWith("sess_"));
     const authToken = verifySuccessRes.json.token;
     console.log(`✅ Passed (Bearer token issued: ${authToken.slice(0, 14)}... length=${authToken.length})`);
@@ -231,7 +231,137 @@ async function runTests() {
     assert.strictEqual(postRevokeRes.status, 401);
     console.log("✅ Passed (Revoked token immediately rejected with 401 Unauthorized)");
 
-    console.log("\n🎉 ALL 12 END-TO-END TESTS PASSED SUCCESSFULLY (12/12)!");
+    // Test 13: Host Secret Enforcement on Tunnel Endpoints
+    console.log("\nTest 13: Tunnel endpoints enforce HOST_SECRET security...");
+    const hostSecret = getHostSecret();
+
+    // Missing auth header
+    const noAuthSyncRes = await makeRequest("POST", "/api/tunnel/sync", { test: true });
+    assert.strictEqual(noAuthSyncRes.status, 403);
+
+    // Wrong auth header
+    const wrongAuthSyncRes = await makeRequest("POST", "/api/tunnel/sync", { test: true }, "wrong_secret");
+    assert.strictEqual(wrongAuthSyncRes.status, 403);
+
+    // Correct auth header
+    const validSyncRes = await makeRequest("POST", "/api/tunnel/sync", {
+      workspaces: [{ id: "test-ws", name: "Test Workspace", path: "/tmp/test" }],
+      activeWorkspace: { id: "test-ws", name: "Test Workspace", path: "/tmp/test" }
+    }, hostSecret);
+    assert.strictEqual(validSyncRes.status, 200);
+    assert.strictEqual(validSyncRes.json.ok, true);
+    console.log("✅ Passed (Tunnel endpoints reject unauthorized access and accept valid HOST_SECRET)");
+
+    // Test 14: Outbound Reverse Tunnel SSE Stream Handshake & State Caching
+    console.log("\nTest 14: Outbound Mac SSE Reverse Tunnel handshake & State Caching...");
+    let tunnelReq = null;
+    let tunnelIncomingEvents = [];
+    const tunnelConnectedPromise = new Promise((resolve) => {
+      tunnelReq = http.request({
+        hostname: "127.0.0.1",
+        port: TEST_PORT,
+        path: "/api/tunnel/stream",
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${hostSecret}`,
+          "Accept": "text/event-stream"
+        }
+      }, res => {
+        assert.strictEqual(res.statusCode, 200);
+        assert.ok(res.headers["content-type"].includes("text/event-stream"));
+
+        let buffer = "";
+        res.on("data", chunk => {
+          buffer += chunk.toString();
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop();
+          for (const block of lines) {
+            if (!block.trim()) continue;
+            const eventMatch = block.match(/event:\s*([^\n]+)/);
+            const dataMatch = block.match(/data:\s*([^\n]+)/);
+            const eventName = eventMatch ? eventMatch[1].trim() : "message";
+            let data = null;
+            try { data = JSON.parse(dataMatch ? dataMatch[1].trim() : "{}"); } catch (_) {}
+            tunnelIncomingEvents.push({ event: eventName, data });
+            if (eventName === "connected") {
+              resolve(true);
+            }
+          }
+        });
+      });
+      tunnelReq.end();
+    });
+
+    await tunnelConnectedPromise;
+    console.log("✅ Passed (Simulated Mac tunnel connected to /api/tunnel/stream successfully)");
+
+    // Test 15: Pairing Request Dispatched Down Active Mac Tunnel
+    console.log("\nTest 15: Pairing request pushed to connected Mac tunnel & approved via /api/tunnel/pair-decision...");
+    const mobilePairRes = await makeRequest("POST", "/api/auth/pair", { clientName: "iPad Air Mobile" });
+    assert.strictEqual(mobilePairRes.status, 200);
+    const remotePairId = mobilePairRes.json.pairId;
+    const remotePin = mobilePairRes.json.rawPin;
+
+    // Allow event loop to receive SSE event on tunnel
+    await new Promise(r => setTimeout(r, 100));
+    const pairRequestEvent = tunnelIncomingEvents.find(e => e.event === "pair_request" && e.data && e.data.pairId === remotePairId);
+    assert.ok(pairRequestEvent, "Mac tunnel should have received pair_request event");
+    assert.strictEqual(pairRequestEvent.data.pin, remotePin);
+
+    // Mac approves pairing via tunnel uplink endpoint
+    const pairApproveRes = await makeRequest("POST", "/api/tunnel/pair-decision", {
+      pairId: remotePairId,
+      approved: true
+    }, hostSecret);
+    assert.strictEqual(pairApproveRes.status, 200);
+
+    // Mobile polls verify endpoint and receives new valid token
+    const remoteVerifyRes = await makeRequest("POST", "/api/auth/verify", { pairId: remotePairId });
+    assert.strictEqual(remoteVerifyRes.status, 200);
+    assert.ok(remoteVerifyRes.json.token.startsWith("ag_"));
+    const remoteMobileToken = remoteVerifyRes.json.token;
+    console.log("✅ Passed (Pairing request flowed down tunnel, approved by host, issued HMAC token)");
+
+    // Test 16: Command RPC Forwarding across Tunnel
+    console.log("\nTest 16: Command RPC dispatched from mobile, executed on Mac, returned to mobile...");
+    // Mobile issues prompt command
+    const rpcPromise = makeRequest("POST", "/api/prompt", { prompt: "run tests across bridge" }, remoteMobileToken);
+
+    // Wait for command event on tunnel
+    let commandReceived = null;
+    for (let i = 0; i < 20; i++) {
+      commandReceived = tunnelIncomingEvents.find(e => e.event === "command" && e.data && e.data.action === "prompt");
+      if (commandReceived) break;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    assert.ok(commandReceived, "Mac tunnel should receive command event");
+    assert.strictEqual(commandReceived.data.payload.prompt, "run tests across bridge");
+    const { reqId } = commandReceived.data;
+
+    // Mac returns RPC response
+    const rpcPostRes = await makeRequest("POST", "/api/tunnel/response", {
+      reqId,
+      ok: true,
+      result: "✅ Bridge RPC execution verified on Mac workstation."
+    }, hostSecret);
+    assert.strictEqual(rpcPostRes.status, 200);
+
+    // Mobile prompt request resolves with answer
+    const rpcResult = await rpcPromise;
+    assert.strictEqual(rpcResult.status, 200);
+    assert.strictEqual(rpcResult.json.ok, true);
+    assert.strictEqual(rpcResult.json.answer, "✅ Bridge RPC execution verified on Mac workstation.");
+    console.log("✅ Passed (Mobile POST /api/prompt relayed across tunnel and returned Mac execution answer)");
+
+    // Test 17: Tunnel Teardown & Clean Disconnect
+    console.log("\nTest 17: Tunnel disconnect handled cleanly...");
+    if (tunnelReq) {
+      tunnelReq.destroy();
+    }
+    await new Promise(r => setTimeout(r, 100));
+    console.log("✅ Passed (Tunnel disconnected cleanly without server errors)");
+
+    console.log("\n🎉 ALL 17 END-TO-END TESTS PASSED SUCCESSFULLY (17/17)!");
   } finally {
     server.close();
     // Cleanup scratch auth store

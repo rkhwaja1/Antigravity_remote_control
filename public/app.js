@@ -148,6 +148,14 @@ async function fetchState() {
       renderDecisionBanner();
       renderPlanView();
       renderSystemView();
+
+      if (data.macConnected) {
+        statusDot.className = "status-dot connected";
+        connText.textContent = "Mac Online 🟢";
+      } else {
+        statusDot.className = "status-dot disconnected";
+        connText.textContent = "Mac Offline 🔴";
+      }
     }
   } catch (err) {
     console.error("State fetch error:", err);
@@ -644,6 +652,15 @@ function renderSystemView() {
   const hostEl = document.getElementById("sys-host");
   const caffEl = document.getElementById("sys-caff");
   const gitEl = document.getElementById("sys-git");
+  const macStatusEl = document.getElementById("sys-mac-status");
+
+  if (macStatusEl) {
+    if (appState.macConnected) {
+      macStatusEl.innerHTML = `<span style="color: var(--success); font-weight: 600;">Connected 🟢</span>`;
+    } else {
+      macStatusEl.innerHTML = `<span style="color: var(--danger); font-weight: 600;">Offline 🔴</span> <span style="font-size: 0.75rem; color: var(--text-secondary);">(run ./run.sh tunnel)</span>`;
+    }
+  }
 
   if (hostEl) hostEl.textContent = `${appState.localIp || window.location.hostname}:3847`;
   if (caffEl) {
@@ -698,7 +715,12 @@ async function initiatePairing() {
     if (data.ok && data.pin) {
       currentPairingId = data.pairId;
       if (pinEl) pinEl.textContent = data.pin;
-      if (statusEl) statusEl.textContent = "Awaiting approval on your Mac workstation...";
+      
+      if (data.macConnected === false) {
+        if (statusEl) statusEl.innerHTML = `⚠️ <b style="color: var(--warning);">Host Mac is offline</b>.<br><span style="font-size: 0.8rem; color: var(--text-secondary);">Start reverse tunnel on your Mac:<br><code style="color: var(--accent-primary);">./run.sh tunnel</code></span>`;
+      } else {
+        if (statusEl) statusEl.textContent = "Awaiting approval on your Mac workstation...";
+      }
 
       // Poll verification endpoint every 2 seconds
       pairingPollInterval = setInterval(async () => {

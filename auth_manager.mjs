@@ -8,9 +8,69 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUTH_STORE_FILE = process.env.AUTH_STORE_FILE || path.resolve(__dirname, "auth_store.json");
 
-// Check if auth is explicitly disabled (e.g. For isolated test environments)
+// Default pre-shared secret for host-to-cloud tunnel (overridden by process.env.HOST_SECRET)
+export function getHostSecret() {
+  return process.env.HOST_SECRET || "antigravity_host_secret_default_key_2026";
+}
+
+// Check if auth is explicitly disabled (e.g. for local isolated unit tests)
 export function isAuthDisabled() {
   return process.env.AUTH_DISABLED === "true";
+}
+
+// Verify host Mac tunnel requests using timing-safe comparison
+export function verifyHostSecret(req) {
+  const secret = getHostSecret();
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") 
+    ? authHeader.slice(7).trim() 
+    : (req.headers["x-host-secret"] || "").trim();
+
+  if (!token) return false;
+
+  const tokenBuf = Buffer.from(token);
+  const secretBuf = Buffer.from(secret);
+  if (tokenBuf.length !== secretBuf.length) return false;
+  return crypto.timingSafeEqual(tokenBuf, secretBuf);
+}
+
+// Issue a stateless, HMAC-SHA256 signed mobile token (valid across Cloud Run restarts)
+export function issueMobileToken(clientName = "Mobile Device", sessionId = null) {
+  const secret = getHostSecret();
+  const payloadObj = {
+    sub: clientName,
+    sid: sessionId || "sess_" + crypto.randomBytes(6).toString("hex"),
+    iat: Date.now(),
+    exp: Date.now() + 1000 * 60 * 60 * 24 * 30 // 30 days
+  };
+
+  const payloadB64 = Buffer.from(JSON.stringify(payloadObj)).toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return `ag_${payloadB64}.${sig}`;
+}
+
+// Verify a stateless HMAC-SHA256 signed mobile token
+export function verifyMobileToken(token) {
+  if (!token || !token.startsWith("ag_")) return null;
+  const parts = token.slice(3).split(".");
+  if (parts.length !== 2) return null;
+  const [payloadB64, sig] = parts;
+
+  const secret = getHostSecret();
+  const expectedSig = crypto.createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expectedSig);
+
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+    if (payload.exp && payload.exp < Date.now()) return null;
+    return payload;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Load auth store from disk
@@ -66,7 +126,7 @@ export function generatePairingRequest(clientName = "Mobile Device", ip = "127.0
   store.pendingPairings.push(pairing);
   saveAuthStore(store);
 
-  // Trigger non-blocking native host prompt on macOS
+  // Trigger non-blocking native host prompt on macOS if on host Mac
   promptHostApproval(pairId, pin, clientName, pairing.ip);
 
   return { pairId, pin, expiresAt };
@@ -109,7 +169,7 @@ end tell`;
   }
 }
 
-// Approve pending pairing (invoked by Mac dialog or CLI command)
+// Approve pending pairing (invoked by Mac dialog or CLI command or tunnel)
 export function approvePairing(target = null) {
   const store = loadAuthStore();
   let pairing = null;
@@ -129,7 +189,7 @@ export function approvePairing(target = null) {
   return pairing;
 }
 
-// Finalize session once approved, issuing a cryptographically secure token
+// Finalize session once approved, issuing an HMAC-signed Bearer token
 export function finalizeSession(pairId) {
   const store = loadAuthStore();
   const idx = store.pendingPairings.findIndex(p => p.pairId === pairId && p.approved);
@@ -138,11 +198,12 @@ export function finalizeSession(pairId) {
   const pairing = store.pendingPairings[idx];
   store.pendingPairings.splice(idx, 1);
 
-  const rawToken = "ag_sec_" + crypto.randomBytes(24).toString("hex");
-  const tokenHash = hashToken(rawToken);
+  const sessionId = "sess_" + crypto.randomBytes(6).toString("hex");
+  const token = issueMobileToken(pairing.clientName, sessionId);
+  const tokenHash = hashToken(token);
 
   const session = {
-    id: "sess_" + crypto.randomBytes(6).toString("hex"),
+    id: sessionId,
     tokenHash,
     clientName: pairing.clientName,
     ip: pairing.ip,
@@ -153,10 +214,10 @@ export function finalizeSession(pairId) {
   store.activeSessions.push(session);
   saveAuthStore(store);
 
-  return { token: rawToken, session };
+  return { token, session };
 }
 
-// Authenticate an incoming HTTP request
+// Authenticate an incoming HTTP request (supports HMAC tokens, hashed tokens, and dev bypass)
 export function authenticateRequest(req) {
   if (isAuthDisabled()) return { authenticated: true, session: { id: "dev_bypass" } };
 
@@ -177,6 +238,31 @@ export function authenticateRequest(req) {
 
   const tokenHash = hashToken(token);
   const store = loadAuthStore();
+
+  if (store.revokedTokens && store.revokedTokens.includes(tokenHash)) {
+    return { authenticated: false };
+  }
+
+  // 1. Verify stateless HMAC-signed token
+  const verifiedPayload = verifyMobileToken(token);
+  if (verifiedPayload) {
+    if (store.revokedSids && store.revokedSids.includes(verifiedPayload.sid)) {
+      return { authenticated: false };
+    }
+    if (store.revokedBefore && verifiedPayload.iat < store.revokedBefore) {
+      return { authenticated: false };
+    }
+    return {
+      authenticated: true,
+      session: {
+        id: verifiedPayload.sid,
+        clientName: verifiedPayload.sub,
+        exp: verifiedPayload.exp
+      }
+    };
+  }
+
+  // 2. Fallback: verify against auth_store.json active sessions
   const session = store.activeSessions.find(s => s.tokenHash === tokenHash);
 
   if (session) {
@@ -193,10 +279,18 @@ export function revokeSession(token) {
   if (!token) return false;
   const tokenHash = hashToken(token);
   const store = loadAuthStore();
-  const initialLen = store.activeSessions.length;
+  store.revokedTokens = store.revokedTokens || [];
+  store.revokedTokens.push(tokenHash);
+
+  const verifiedPayload = verifyMobileToken(token);
+  if (verifiedPayload && verifiedPayload.sid) {
+    store.revokedSids = store.revokedSids || [];
+    store.revokedSids.push(verifiedPayload.sid);
+  }
+
   store.activeSessions = store.activeSessions.filter(s => s.tokenHash !== tokenHash);
   saveAuthStore(store);
-  return store.activeSessions.length < initialLen;
+  return true;
 }
 
 // Revoke all active sessions (nuclear reset)
@@ -204,6 +298,7 @@ export function revokeAllSessions() {
   const store = loadAuthStore();
   store.activeSessions = [];
   store.pendingPairings = [];
+  store.revokedBefore = Date.now();
   saveAuthStore(store);
   return true;
 }

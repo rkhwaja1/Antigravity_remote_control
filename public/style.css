@@ -167,6 +167,11 @@ header {
   box-shadow: 0 0 8px var(--success);
 }
 
+.status-dot.disconnected {
+  background-color: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
+
 /* Active Decision Banner / Toast */
 #decision-banner {
   display: none;
