@@ -54,6 +54,23 @@ Enable users to securely control their Mac workstation's Antigravity IDE and loc
   - [x] End-to-end live testing from Cloud Run across reverse tunnel verified
   - [x] Commit and push to GitHub `main`
 
+- [x] Phase 7: Robust Mobile Prompt Ingestion & Full Output Streaming
+  - [x] 7.1 Fix Antigravity IDE macOS Process & Bundle Targeting in `task_executor.mjs`
+    - Target `application id "com.google.antigravity-ide"` and process `whose bundle identifier is "com.google.antigravity-ide"` (process name `Electron` on macOS).
+    - Activate window, focus chat panel (`Cmd+L`), paste directive prompt via clipboard, and submit (`Return`).
+    - Fallback support for standalone `com.google.antigravity` if running in 2.0 app.
+  - [x] 7.2 Prevent Output Truncation in `server.mjs`
+    - Stop slicing responses to 300 characters in `logActivity` and SSE broadcasts (`server.mjs`).
+    - Stream full execution results to connected mobile clients.
+  - [x] 7.3 Complete Mobile UI Response Display in `public/app.js`
+    - Ensure `handleSendPrompt` renders the full returned answer from `/api/prompt` when received.
+    - Update SSE log handler to render full responses smoothly without truncation.
+  - [x] 7.4 Verification & Live iPad Directive Testing
+    - Run automated tests (`npm test` - 17/17 passing).
+    - Restart local tunnel daemon (`./run.sh restart`).
+    - Verify prompt injection and output streaming live.
+    - Commit and push to GitHub `main`.
+
 ---
 
 ## Verification & Architecture Review

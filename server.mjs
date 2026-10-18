@@ -686,7 +686,7 @@ const server = http.createServer(async (req, res) => {
             try {
               const rpc = await forwardCommandToMac("prompt", { prompt: clean, rawPrompt: prompt.trim(), workspaceId });
               if (rpc.ok) {
-                logActivity("response", (rpc.result || "").slice(0, 300), { fullLength: (rpc.result || "").length });
+                logActivity("response", rpc.result || "", { fullLength: (rpc.result || "").length });
                 broadcast("state_change", { reason: "prompt_answered" });
                 res.writeHead(200);
                 res.end(JSON.stringify({ ok: true, type: "task_response", answer: rpc.result }));
@@ -719,7 +719,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             const answer = await executeUserDirective(clean);
-            logActivity("response", answer.slice(0, 300), { fullLength: answer.length });
+            logActivity("response", answer, { fullLength: answer.length });
             broadcast("state_change", { reason: "prompt_answered" });
 
             res.writeHead(200);

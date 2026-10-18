@@ -162,9 +162,16 @@ async function fetchState() {
   }
 }
 
+// Seen log entries to prevent duplicate cards
+const seenLogIds = new Set();
+
 // Append Log Entry to Console
 function appendLogEntry(entry) {
+  if (entry.id && seenLogIds.has(entry.id)) return null;
+  if (entry.id) seenLogIds.add(entry.id);
+
   const card = document.createElement("div");
+  if (entry.id) card.id = entry.id;
   card.className = `log-card ${entry.type || "response"}`;
   
   const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -180,6 +187,7 @@ function appendLogEntry(entry) {
 
   logStream.appendChild(card);
   scrollToBottom();
+  return card;
 }
 
 // Simple Markdown Formatter for Web
@@ -190,9 +198,13 @@ function formatMarkdown(text) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // Bold
+  // Code blocks: ```language\n...\n```
+  clean = clean.replace(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
+  // Blockquotes: > ...
+  clean = clean.replace(/^>\s*(.+)$/gm, "<blockquote>$1</blockquote>");
+  // Bold: **...**
   clean = clean.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  // Inline code
+  // Inline code: `...`
   clean = clean.replace(/`([^`]+)`/g, "<code>$1</code>");
   // Linebreaks
   clean = clean.replace(/\n/g, "<br>");
@@ -209,9 +221,19 @@ async function handleSendPrompt(e) {
 
   // Optimistic UI
   appendLogEntry({
+    id: "prompt_" + Date.now(),
     timestamp: new Date().toISOString(),
     type: "prompt",
     message: text
+  });
+
+  // Show running indicator
+  const pendingId = "pending_" + Date.now();
+  appendLogEntry({
+    id: pendingId,
+    timestamp: new Date().toISOString(),
+    type: "response",
+    message: "⏳ *Executing directive in Antigravity IDE on Mac...*"
   });
 
   promptInput.value = "";
@@ -224,7 +246,19 @@ async function handleSendPrompt(e) {
       body: JSON.stringify({ prompt: text })
     });
     const result = await res.json();
-    if (!result.ok) {
+    
+    // Remove pending card
+    const pendingEl = document.getElementById(pendingId);
+    if (pendingEl) pendingEl.remove();
+
+    if (result.ok && result.answer) {
+      appendLogEntry({
+        id: "resp_" + Date.now(),
+        timestamp: new Date().toISOString(),
+        type: "response",
+        message: result.answer
+      });
+    } else if (!result.ok) {
       appendLogEntry({
         timestamp: new Date().toISOString(),
         type: "response",
@@ -232,6 +266,9 @@ async function handleSendPrompt(e) {
       });
     }
   } catch (err) {
+    const pendingEl = document.getElementById(pendingId);
+    if (pendingEl) pendingEl.remove();
+
     appendLogEntry({
       timestamp: new Date().toISOString(),
       type: "response",
@@ -241,6 +278,7 @@ async function handleSendPrompt(e) {
     sendBtn.disabled = false;
   }
 }
+
 
 function setQuickPrompt(text) {
   promptInput.value = text;

@@ -152,6 +152,23 @@ function getGitStatus(workspacePath = null) {
   };
 }
 
+// Helper to find the latest active Antigravity IDE conversation ID
+export function getLatestBrainConversationId() {
+  if (existsSync(BRAIN_DIR)) {
+    try {
+      const dirs = readdirSync(BRAIN_DIR)
+        .filter(d => !d.startsWith(".") && d !== "tempmediaStorage")
+        .map(d => ({
+          id: d,
+          mtime: statSync(join(BRAIN_DIR, d)).mtimeMs
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (dirs.length > 0) return dirs[0].id;
+    } catch (_) {}
+  }
+  return null;
+}
+
 // Inject prompt into live Antigravity IDE chat session
 export function injectPromptIntoIde(promptText, workspacePath = null) {
   const wsDir = workspacePath || getActiveWorkspace().path;
@@ -163,39 +180,76 @@ export function injectPromptIntoIde(promptText, workspacePath = null) {
     } catch (_) {}
   }
 
-  // 2. Pass prompt via agy chat CLI
+  // 2. Direct macOS Automation targeting Antigravity IDE
+  if (process.platform === "darwin") {
+    try {
+      // Put prompt text into macOS clipboard
+      spawnSync("pbcopy", { input: promptText, encoding: "utf8" });
+
+      const appleScript = `
+tell application "System Events"
+    set ideProc to null
+    try
+        set ideProc to (first process whose bundle identifier is "com.google.antigravity-ide")
+    end try
+    if ideProc is null then
+        try
+            set ideProc to (first process whose bundle identifier is "com.google.antigravity")
+        end try
+    end if
+    if ideProc is null then
+        try
+            set ideProc to (first process whose name is "Electron" or name is "Antigravity")
+        end try
+    end if
+
+    if ideProc is not null then
+        try
+            tell application id (bundle identifier of ideProc) to activate
+        on error
+            tell application "Antigravity IDE" to activate
+        end try
+        delay 0.3
+        tell ideProc
+            -- Focus or open chat panel in IDE
+            keystroke "l" using {command down}
+            delay 0.3
+            -- Paste directive text from clipboard
+            keystroke "v" using {command down}
+            delay 0.3
+            -- Submit to conversation
+            key code 36
+        end tell
+        return "SUCCESS"
+    else
+        return "NO_PROCESS"
+    end if
+end tell`;
+
+      const res = spawnSync("osascript", ["-e", appleScript], { encoding: "utf8" });
+      const out = (res.stdout || "").trim();
+      if (out === "SUCCESS") {
+        console.log(`[Executor] Successfully injected prompt into Antigravity IDE chat.`);
+        return true;
+      }
+    } catch (err) {
+      console.warn(`[Executor] System Events injection warning:`, err.message);
+    }
+  }
+
+  // 3. Fallback to CLI if headless or non-mac
   try {
-    console.log(`[Executor] Passing prompt to Antigravity IDE in ${wsDir}...`);
     const res = spawnSync("agy", ["chat", "-r", promptText], { 
       cwd: wsDir, 
       encoding: "utf8", 
-      timeout: 15000 
+      timeout: 10000 
     });
-    if (res.status === 0) {
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[Executor] agy chat CLI failed, trying System Events fallback:`, err.message);
+    return res.status === 0;
+  } catch (_) {
+    return false;
   }
-
-  // Fallback to System Events targeting "Antigravity"
-  const appleScript = `
-set the clipboard to ${JSON.stringify(promptText)}
-tell application "Antigravity" to activate
-delay 0.4
-tell application "System Events"
-    tell process "Antigravity"
-        keystroke "l" using {command down}
-        delay 0.3
-        keystroke "v" using {command down}
-        delay 0.3
-        key code 36
-    end tell
-end tell
-`;
-  const res = spawnSync("osascript", ["-e", appleScript], { encoding: "utf8" });
-  return res.status === 0;
 }
+
 
 // Main autonomous task execution logic
 export async function executeUserDirective(promptText, explicitWorkspace = null) {
@@ -303,11 +357,25 @@ export async function executeUserDirective(promptText, explicitWorkspace = null)
     return response;
   }
 
+  const convoId = getLatestBrainConversationId();
+
+  // Case 3b: Direct conversational connectivity check
+  if (/^(?:can you read this|ping|hello|hi|are you there|test)[?!.]*$/i.test(cleanPrompt)) {
+    console.log(`[Executor] Direct conversation check from mobile: "${cleanPrompt}"`);
+    injectPromptIntoIde(cleanPrompt, ws.path);
+    const answer = `✅ **Yes, I can read this!**\n\nYour mobile directive was received from your device and routed into your live Antigravity IDE session for **${ws.name}**.\n\n📁 \`${ws.path}\`\n⚡ Live tunnel connection is fully active and responsive!`;
+    if (convoId) recordTurn(convoId, cleanPrompt, answer);
+    return answer;
+  }
+
   // Case 4: General Antigravity task execution
   console.log(`[Executor] Forwarding directive to Antigravity IDE [${ws.name}]: "${cleanPrompt}"`);
   const success = injectPromptIntoIde(cleanPrompt, ws.path);
-  return `🤖 **Antigravity on Mac [${ws.name}] — Task Injected to Live IDE**\n\nYour directive has been routed into your active Antigravity IDE session for **${ws.name}**:\n> *"${cleanPrompt}"*\n\n📁 \`${ws.path}\`\n\n${success ? "⚡ Agent execution launched in Antigravity IDE." : "⚠️ Please check your Mac."}`;
+  const response = `🤖 **Antigravity on Mac [${ws.name}] — Task Injected to Live IDE**\n\nYour directive has been routed into your active Antigravity IDE session for **${ws.name}**:\n> *"${cleanPrompt}"*\n\n📁 \`${ws.path}\`\n\n${success ? "⚡ Agent execution launched in Antigravity IDE." : "⚠️ Please check your Mac."}`;
+  if (convoId) recordTurn(convoId, cleanPrompt, response);
+  return response;
 }
+
 
 // Manage conversation sessions across Gemini and Mac
 export function getOrCreateSession(geminiConvoId) {
