@@ -13,10 +13,19 @@ import {
   applyCommentToPlan, 
   PLAN_STATES 
 } from "./plan_state_machine.mjs";
-import { loadDecisions, saveDecisions } from "./gemini_bridge.mjs";
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DECISIONS_FILE = process.env.DECISIONS_FILE || path.resolve(__dirname, "decisions.json");
+
+export function loadDecisions() {
+  if (fs.existsSync(DECISIONS_FILE)) {
+    try { return JSON.parse(fs.readFileSync(DECISIONS_FILE, "utf8")); } catch (_) {}
+  }
+  return { activeDecision: null, history: [] };
+}
+export function saveDecisions(data) {
+  fs.writeFileSync(DECISIONS_FILE, JSON.stringify(data, null, 2), "utf8");
+}
 const PUBLIC_DIR = path.resolve(__dirname, "public");
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3847;
 

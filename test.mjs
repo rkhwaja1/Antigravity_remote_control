@@ -1,6 +1,6 @@
 import assert from "assert";
 import http from "http";
-import { startServer } from "./web_bridge_server.mjs";
+import { startServer } from "./server.mjs";
 import { saveActivePlanSession, PLAN_STATES } from "./plan_state_machine.mjs";
 
 async function runTests() {

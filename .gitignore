@@ -1,0 +1,9 @@
+node_modules/
+*.log
+*.pid
+active_plan_session.json
+bridge_state.json
+decisions.json
+bridge_conversations.json
+active_mobile_session.md
+.DS_Store

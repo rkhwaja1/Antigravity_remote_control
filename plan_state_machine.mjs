@@ -6,8 +6,8 @@ import { sendTextToGemini, sendNotification } from "./chrome_adapter.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const WORKSPACE_ROOT = resolve(__dirname, "..");
-const ACTIVE_PLAN_FILE = resolve(WORKSPACE_ROOT, "scratch/active_plan_session.json");
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || resolve(__dirname);
+const ACTIVE_PLAN_FILE = process.env.ACTIVE_PLAN_FILE || resolve(__dirname, "active_plan_session.json");
 
 export const PLAN_STATES = {
   DRAFTED: "DRAFTED",

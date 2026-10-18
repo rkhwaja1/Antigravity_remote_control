@@ -8,8 +8,8 @@ const __dirname = dirname(__filename);
 const WORKSPACE_ROOT = resolve(__dirname, "..");
 
 const BRAIN_DIR = resolve(process.env.HOME, ".gemini/antigravity-ide/brain");
-const SESSIONS_FILE = resolve(WORKSPACE_ROOT, "scratch/bridge_conversations.json");
-const LIVE_SESSION_MD = resolve(WORKSPACE_ROOT, "scratch/active_mobile_session.md");
+const SESSIONS_FILE = process.env.SESSIONS_FILE || resolve(__dirname, "bridge_conversations.json");
+const LIVE_SESSION_MD = process.env.LIVE_SESSION_MD || resolve(__dirname, "active_mobile_session.md");
 
 // Find plans across brain and tasks
 function findPlans(keywords) {
