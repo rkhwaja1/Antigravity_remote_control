@@ -1,5 +1,7 @@
 // State Container
 let appState = {
+  activeWorkspace: null,
+  workspaces: [],
   activePlan: null,
   activeDecision: null,
   git: null,
@@ -37,6 +39,8 @@ function switchTab(tabId) {
     setTimeout(scrollToBottom, 50);
   } else if (tabId === "plan") {
     renderPlanView();
+  } else if (tabId === "system") {
+    renderSystemView();
   }
 }
 
@@ -63,6 +67,17 @@ function initSSE() {
 
   sseSource.addEventListener("state_change", () => {
     fetchState();
+  });
+
+  sseSource.addEventListener("workspace_changed", e => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.activeWorkspace) {
+        appState.activeWorkspace = data.activeWorkspace;
+        renderWorkspaceUi();
+      }
+      fetchState();
+    } catch (_) {}
   });
 
   sseSource.addEventListener("log", e => {
@@ -92,6 +107,7 @@ async function fetchState() {
     const data = await res.json();
     if (data.ok) {
       appState = data;
+      renderWorkspaceUi();
       renderDecisionBanner();
       renderPlanView();
       renderSystemView();
@@ -395,6 +411,194 @@ async function submitRevisionComment() {
     }
   } catch (err) {
     alert("Failed to submit comment: " + err.message);
+  }
+}
+
+// Workspace UI Rendering & Switcher
+function renderWorkspaceUi() {
+  const ws = appState.activeWorkspace;
+  const workspaces = appState.workspaces || [];
+
+  // 1. Header Workspace Pill
+  const pillName = document.getElementById("ws-pill-name");
+  const pillBranch = document.getElementById("ws-pill-branch");
+  const pillDirty = document.getElementById("ws-pill-dirty");
+
+  if (ws && pillName) {
+    pillName.textContent = ws.name || "Workspace";
+    if (pillBranch) {
+      pillBranch.textContent = ws.gitBranch || "HEAD";
+      pillBranch.style.display = ws.gitBranch ? "inline-block" : "none";
+    }
+    if (pillDirty) {
+      pillDirty.style.display = (ws.hasChanges || ws.uncommittedCount > 0) ? "inline-block" : "none";
+    }
+  }
+
+  // 2. Chat Horizontal Quick Chips Bar
+  const chipsBar = document.getElementById("workspace-chips-bar");
+  if (chipsBar) {
+    chipsBar.innerHTML = "";
+    // Show top 6 workspaces
+    workspaces.slice(0, 6).forEach(item => {
+      const chip = document.createElement("div");
+      const isActive = ws && (ws.id === item.id || ws.path === item.path);
+      chip.className = `ws-chip ${isActive ? "active" : ""}`;
+      
+      const dirtyDot = (item.hasChanges || item.uncommittedCount > 0) ? `<span class="chip-dot">●</span>` : "";
+      const branchHtml = item.gitBranch ? `<span class="chip-branch">${item.gitBranch}</span>` : "";
+      
+      chip.innerHTML = `<span>📁 ${item.name}</span>${branchHtml}${dirtyDot}`;
+      chip.onclick = () => selectWorkspace(item.id);
+      chipsBar.appendChild(chip);
+    });
+
+    // Add Workspace Chip
+    const addChip = document.createElement("div");
+    addChip.className = "ws-chip ws-chip-add";
+    addChip.innerHTML = `<span>➕ All / Add</span>`;
+    addChip.onclick = () => openWorkspaceModal();
+    chipsBar.appendChild(addChip);
+  }
+
+  // 3. Modal Workspaces List
+  const modalList = document.getElementById("modal-workspaces-list");
+  if (modalList) {
+    modalList.innerHTML = "";
+    if (workspaces.length === 0) {
+      modalList.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 20px;">No workspaces found.</div>`;
+    } else {
+      workspaces.forEach(item => {
+        const card = document.createElement("div");
+        const isActive = ws && (ws.id === item.id || ws.path === item.path);
+        card.className = `workspace-card ${isActive ? "active" : ""}`;
+
+        const badgeText = isActive ? "ACTIVE" : (item.source === "seed" ? "DEFAULT" : (item.source === "manual" ? "CUSTOM" : "PROJECT"));
+        const badgeClass = isActive ? "ws-card-badge badge-active" : "ws-card-badge";
+        const branchBadge = item.gitBranch ? `<span class="ws-card-branch">⑂ ${item.gitBranch}</span>` : `<span style="color: var(--text-muted); font-size: 0.72rem;">no git</span>`;
+        const changesText = item.hasChanges ? `<span class="ws-card-changes">● ${item.uncommittedCount} modified</span>` : `<span style="color: var(--success); font-size: 0.72rem;">Clean</span>`;
+
+        card.innerHTML = `
+          <div class="ws-card-left">
+            <div class="ws-card-title-row">
+              <span class="ws-card-name">📁 ${item.name}</span>
+              <span class="${badgeClass}">${badgeText}</span>
+            </div>
+            <div class="ws-card-path">${item.path}</div>
+            <div class="ws-card-meta">
+              ${branchBadge}
+              ${changesText}
+            </div>
+          </div>
+          <button class="ws-card-select-btn" onclick="event.stopPropagation(); selectWorkspace('${item.id}')">
+            ${isActive ? "Selected ✓" : "Switch ⇋"}
+          </button>
+        `;
+        card.onclick = () => selectWorkspace(item.id);
+        modalList.appendChild(card);
+      });
+    }
+  }
+
+  // 4. System View Active Workspace Details
+  const sysWsName = document.getElementById("sys-ws-name");
+  const sysWsPath = document.getElementById("sys-ws-path");
+  const sysWsBranch = document.getElementById("sys-ws-branch");
+  const sysWsChanges = document.getElementById("sys-ws-changes");
+
+  if (ws) {
+    if (sysWsName) sysWsName.textContent = ws.name;
+    if (sysWsPath) sysWsPath.textContent = ws.path;
+    if (sysWsBranch) sysWsBranch.textContent = ws.gitBranch || "None (non-git directory)";
+    if (sysWsChanges) {
+      if (ws.hasChanges) {
+        sysWsChanges.textContent = `${ws.uncommittedCount} modified file(s)`;
+        sysWsChanges.style.color = "var(--warning)";
+      } else {
+        sysWsChanges.textContent = "Clean";
+        sysWsChanges.style.color = "var(--success)";
+      }
+    }
+  }
+}
+
+// Workspace Modal Controls
+function openWorkspaceModal() {
+  const modal = document.getElementById("workspace-modal");
+  if (modal) modal.classList.add("active");
+  renderWorkspaceUi();
+}
+
+function closeWorkspaceModal() {
+  const modal = document.getElementById("workspace-modal");
+  if (modal) modal.classList.remove("active");
+}
+
+function closeWorkspaceModalOnBg(e) {
+  if (e.target.id === "workspace-modal") {
+    closeWorkspaceModal();
+  }
+}
+
+async function selectWorkspace(id) {
+  if (navigator.vibrate) navigator.vibrate(20);
+  closeWorkspaceModal();
+
+  try {
+    const res = await fetch("/api/workspaces/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+    const result = await res.json();
+    if (result.ok && result.activeWorkspace) {
+      appState.activeWorkspace = result.activeWorkspace;
+      appendLogEntry({
+        timestamp: new Date().toISOString(),
+        type: "system",
+        message: `📁 Switched active workspace to: **${result.activeWorkspace.name}**\n\`${result.activeWorkspace.path}\``
+      });
+      fetchState();
+    } else {
+      alert("Error: " + (result.error || "Failed to switch workspace"));
+    }
+  } catch (err) {
+    alert("Network error: " + err.message);
+  }
+}
+
+async function handleAddWorkspace(e) {
+  e.preventDefault();
+  const pathInput = document.getElementById("add-ws-path");
+  const nameInput = document.getElementById("add-ws-name");
+  const wsPath = pathInput ? pathInput.value.trim() : "";
+  const name = nameInput ? nameInput.value.trim() : "";
+
+  if (!wsPath) return;
+  if (navigator.vibrate) navigator.vibrate(25);
+
+  try {
+    const res = await fetch("/api/workspaces/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: wsPath, name: name || undefined })
+    });
+    const result = await res.json();
+    if (result.ok && result.activeWorkspace) {
+      closeWorkspaceModal();
+      if (pathInput) pathInput.value = "";
+      if (nameInput) nameInput.value = "";
+      appendLogEntry({
+        timestamp: new Date().toISOString(),
+        type: "system",
+        message: `➕ Added and activated workspace: **${result.activeWorkspace.name}**\n\`${result.activeWorkspace.path}\``
+      });
+      fetchState();
+    } else {
+      alert("Error adding workspace: " + (result.error || "Unknown error"));
+    }
+  } catch (err) {
+    alert("Network error: " + err.message);
   }
 }
 

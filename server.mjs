@@ -13,6 +13,13 @@ import {
   applyCommentToPlan, 
   PLAN_STATES 
 } from "./plan_state_machine.mjs";
+import { 
+  loadWorkspaces, 
+  getActiveWorkspace, 
+  setActiveWorkspace, 
+  addWorkspace, 
+  getWorkspaceGitInfo 
+} from "./workspace_manager.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DECISIONS_FILE = process.env.DECISIONS_FILE || path.resolve(__dirname, "decisions.json");
@@ -72,19 +79,15 @@ export function getLocalIp() {
   return "localhost";
 }
 
-// Get Git Status Summary
-function getGitInfo() {
-  try {
-    const branchRes = spawnSync("git", ["branch", "--show-current"], { encoding: "utf8" });
-    const statusRes = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" });
-    return {
-      branch: (branchRes.stdout || "main").trim(),
-      hasChanges: (statusRes.stdout || "").trim().length > 0,
-      modifiedCount: (statusRes.stdout || "").trim().split("\n").filter(Boolean).length
-    };
-  } catch (_) {
-    return { branch: "main", hasChanges: false, modifiedCount: 0 };
-  }
+// Get Git Status Summary for a workspace
+function getGitInfo(dirPath = null) {
+  const targetDir = dirPath || getActiveWorkspace().path;
+  const info = getWorkspaceGitInfo(targetDir);
+  return {
+    branch: info.branch || "HEAD",
+    hasChanges: info.hasChanges,
+    modifiedCount: info.modifiedCount
+  };
 }
 
 // MIME Types
@@ -134,8 +137,10 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith("/api/")) {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-    // GET /api/state: Comprehensive system and bridge state
+    // GET /api/state: Comprehensive system, workspace and bridge state
     if (pathname === "/api/state" && req.method === "GET") {
+      const activeWs = getActiveWorkspace();
+      const workspacesData = loadWorkspaces();
       const planSession = loadActivePlanSession();
       let formattedPlan = null;
       if (planSession && planSession.planPath && fs.existsSync(planSession.planPath)) {
@@ -144,7 +149,7 @@ const server = http.createServer(async (req, res) => {
         } catch (_) {}
       }
       const decData = loadDecisions();
-      const git = getGitInfo();
+      const git = getGitInfo(activeWs.path);
 
       const caffeinateRes = spawnSync("pgrep", ["caffeinate"], { encoding: "utf8" });
       const isCaffeinateActive = (caffeinateRes.stdout || "").trim().length > 0;
@@ -154,6 +159,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         localIp: getLocalIp(),
         port: PORT,
+        activeWorkspace: activeWs,
+        workspaces: workspacesData.workspaces,
         activePlan: planSession ? {
           ...planSession,
           formatted: formattedPlan
@@ -166,17 +173,82 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // GET /api/workspaces: List all workspaces
+    if (pathname === "/api/workspaces" && req.method === "GET") {
+      const data = loadWorkspaces();
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        ok: true,
+        activeWorkspace: getActiveWorkspace(),
+        workspaces: data.workspaces
+      }));
+      return;
+    }
+
+    // POST /api/workspaces/select: Select active workspace
+    if (pathname === "/api/workspaces/select" && req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", async () => {
+        try {
+          const { id, path: wsPath } = JSON.parse(body || "{}");
+          const target = setActiveWorkspace(id || wsPath);
+          logActivity("system", `Switched workspace to: ${target.name}`, { path: target.path });
+          broadcast("workspace_changed", { activeWorkspace: target, reason: "user_selected" });
+          broadcast("state_change", { reason: "workspace_swapped" });
+
+          res.writeHead(200);
+          res.end(JSON.stringify({ ok: true, activeWorkspace: target }));
+        } catch (err) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // POST /api/workspaces/add: Add custom workspace directory
+    if (pathname === "/api/workspaces/add" && req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", async () => {
+        try {
+          const { path: wsPath, name } = JSON.parse(body || "{}");
+          if (!wsPath || !wsPath.trim()) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: "Workspace path is required" }));
+            return;
+          }
+          const added = addWorkspace(wsPath.trim(), name ? name.trim() : null);
+          logActivity("system", `Added workspace: ${added.name}`, { path: added.path });
+          broadcast("workspace_changed", { activeWorkspace: added, reason: "workspace_added" });
+          broadcast("state_change", { reason: "workspace_added" });
+
+          res.writeHead(200);
+          res.end(JSON.stringify({ ok: true, activeWorkspace: added }));
+        } catch (err) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
     // POST /api/prompt: Submit a directive to Antigravity
     if (pathname === "/api/prompt" && req.method === "POST") {
       let body = "";
       req.on("data", chunk => body += chunk);
       req.on("end", async () => {
         try {
-          const { prompt } = JSON.parse(body || "{}");
+          const { prompt, workspaceId } = JSON.parse(body || "{}");
           if (!prompt || !prompt.trim()) {
             res.writeHead(400);
             res.end(JSON.stringify({ error: "Prompt is required" }));
             return;
+          }
+
+          if (workspaceId) {
+            try { setActiveWorkspace(workspaceId); } catch (_) {}
           }
 
           logActivity("prompt", prompt.trim());
@@ -194,7 +266,7 @@ const server = http.createServer(async (req, res) => {
             return;
           }
 
-          // Execute directive
+          // Execute directive with active workspace context
           const answer = await executeUserDirective(clean);
           logActivity("response", answer.slice(0, 300), { fullLength: answer.length });
           broadcast("state_change", { reason: "prompt_answered" });

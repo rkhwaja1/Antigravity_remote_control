@@ -134,13 +134,57 @@ async function runTests() {
     assert.strictEqual(sseHandshake, true);
     console.log("✅ Passed (SSE stream established with real-time events)");
 
-    console.log("\n🎉 ALL PWA SERVER TESTS PASSED (5/5)!");
+    // Test 6: Workspaces API
+    console.log("\nTest 6: GET /api/workspaces returns active and candidate workspaces...");
+    const wsRes = await makeRequest("GET", "/api/workspaces");
+    assert.strictEqual(wsRes.status, 200);
+    assert.strictEqual(wsRes.json.ok, true);
+    assert.ok(wsRes.json.activeWorkspace);
+    assert.ok(Array.isArray(wsRes.json.workspaces));
+    assert.ok(wsRes.json.workspaces.length >= 2);
+    console.log(`✅ Passed (Workspaces listed: ${wsRes.json.workspaces.length}, Active: ${wsRes.json.activeWorkspace.name})`);
+
+    // Test 7: Workspace Selection
+    console.log("\nTest 7: POST /api/workspaces/select switches active workspace...");
+    const selectRes = await makeRequest("POST", "/api/workspaces/select", { id: "antigravity-remote" });
+    assert.strictEqual(selectRes.status, 200);
+    assert.strictEqual(selectRes.json.ok, true);
+    assert.strictEqual(selectRes.json.activeWorkspace.id, "antigravity-remote");
+
+    const stateAfterSelect = await makeRequest("GET", "/api/state");
+    assert.strictEqual(stateAfterSelect.json.activeWorkspace.id, "antigravity-remote");
+    console.log("✅ Passed (Switched active workspace to antigravity-remote and state updated)");
+
+    // Test 8: Custom Workspace Addition
+    console.log("\nTest 8: POST /api/workspaces/add registers custom directory...");
+    const addRes = await makeRequest("POST", "/api/workspaces/add", {
+      path: "/Users/rashid/dental",
+      name: "Dental Root"
+    });
+    assert.strictEqual(addRes.status, 200);
+    assert.strictEqual(addRes.json.ok, true);
+    assert.strictEqual(addRes.json.activeWorkspace.name, "Dental Root");
+    console.log("✅ Passed (Custom workspace folder added and activated)");
+
+    // Test 9: Context-Aware Execution via Directive Prefix
+    console.log("\nTest 9: Context-aware prompt execution with workspace prefix...");
+    const prefixPromptRes = await makeRequest("POST", "/api/prompt", {
+      prompt: "@dental check git status"
+    });
+    assert.strictEqual(prefixPromptRes.status, 200);
+    assert.strictEqual(prefixPromptRes.json.ok, true);
+    assert.ok(prefixPromptRes.json.answer.includes("Dental"));
+    console.log("✅ Passed (Inline @dental targeted Dental workspace successfully)");
+
+    console.log("\n🎉 ALL PWA & MULTI-WORKSPACE SERVER TESTS PASSED (9/9)!");
   } finally {
     server.close();
   }
 }
 
-runTests().catch(err => {
+runTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error("Test failed:", err);
   process.exit(1);
 });
