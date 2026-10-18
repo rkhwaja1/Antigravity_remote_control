@@ -20,6 +20,15 @@ import {
   addWorkspace, 
   getWorkspaceGitInfo 
 } from "./workspace_manager.mjs";
+import { 
+  generatePairingRequest, 
+  approvePairing, 
+  finalizeSession, 
+  authenticateRequest, 
+  revokeSession, 
+  getActiveSessions, 
+  isAuthDisabled 
+} from "./auth_manager.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DECISIONS_FILE = process.env.DECISIONS_FILE || path.resolve(__dirname, "decisions.json");
@@ -109,7 +118,7 @@ const server = http.createServer(async (req, res) => {
   // CORS Headers for LAN/Mobile access
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -117,7 +126,111 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // SSE Channel
+  // ==========================================
+  // Authentication & Pairing Endpoints (Public)
+  // ==========================================
+  if (pathname === "/api/auth/pair" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { clientName } = JSON.parse(body || "{}");
+        const ip = req.socket.remoteAddress || "127.0.0.1";
+        const pairing = generatePairingRequest(clientName || "Mobile Device", ip);
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          pairId: pairing.pairId,
+          pin: `${pairing.pin.slice(0, 3)}-${pairing.pin.slice(3)}`,
+          rawPin: pairing.pin,
+          expiresAt: pairing.expiresAt
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (pathname === "/api/auth/verify" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { pairId } = JSON.parse(body || "{}");
+        if (!pairId) {
+          res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ error: "pairId is required" }));
+          return;
+        }
+        const result = finalizeSession(pairId);
+        if (result && result.token) {
+          logActivity("system", `📱 Paired device authenticated: ${result.session.clientName}`);
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: true, token: result.token, session: result.session }));
+        } else {
+          res.writeHead(202, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({ ok: false, pending: true, message: "Awaiting approval on your Mac workstation." }));
+        }
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (pathname === "/api/auth/status" && req.method === "GET") {
+    const auth = authenticateRequest(req);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({
+      ok: true,
+      authenticated: auth.authenticated,
+      authDisabled: isAuthDisabled(),
+      session: auth.session || null,
+      activeSessions: auth.authenticated ? getActiveSessions() : []
+    }));
+    return;
+  }
+
+  if (pathname === "/api/auth/revoke" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const { token } = JSON.parse(body || "{}");
+        const authHeader = req.headers["authorization"] || "";
+        const targetToken = token || (authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null);
+        const revoked = revokeSession(targetToken);
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, revoked }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // ==========================================
+  // Authentication Guard for Protected Routes
+  // ==========================================
+  const isProtectedApiOrEvents = pathname.startsWith("/api/") || pathname === "/events";
+  if (isProtectedApiOrEvents) {
+    const auth = authenticateRequest(req);
+    if (!auth.authenticated) {
+      res.writeHead(401, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        ok: false,
+        authRequired: true,
+        error: "Unauthorized. Please pair this device with your Mac workstation."
+      }));
+      return;
+    }
+  }
+
+  // SSE Channel (Protected: requires valid token)
   if (pathname === "/events") {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -133,7 +246,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // API Endpoints
+  // Protected API Endpoints
   if (pathname.startsWith("/api/")) {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 

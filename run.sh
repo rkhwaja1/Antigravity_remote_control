@@ -97,6 +97,59 @@ status_dashboard() {
     echo "🔴 Mobile Dashboard is NOT running."
 }
 
+pair_device() {
+    TARGET="$1"
+    cd "$SCRIPT_DIR"
+    node -e '
+      import("./auth_manager.mjs").then(m => {
+        const target = process.argv[1];
+        const res = m.approvePairing(target || null);
+        if (res) {
+          console.log("✅ Successfully approved pairing request:");
+          console.log(`   • Device: ${res.clientName} (${res.ip})`);
+          console.log(`   • PIN:    ${res.pin}`);
+          console.log(`   • PairID: ${res.pairId}`);
+        } else {
+          console.log("❌ No active pending pairing found to approve.");
+          const store = m.loadAuthStore();
+          if (store.pendingPairings.length > 0) {
+            console.log("\nPending pairing requests:");
+            store.pendingPairings.forEach(p => {
+              console.log(` - PIN: ${p.pin} | Device: ${p.clientName} (${p.ip}) | ID: ${p.pairId}`);
+            });
+          }
+        }
+      });
+    ' "$TARGET"
+}
+
+unpair_all_devices() {
+    cd "$SCRIPT_DIR"
+    node -e '
+      import("./auth_manager.mjs").then(m => {
+        m.revokeAllSessions();
+        console.log("🔒 All active paired mobile sessions have been revoked.");
+      });
+    '
+}
+
+list_sessions() {
+    cd "$SCRIPT_DIR"
+    node -e '
+      import("./auth_manager.mjs").then(m => {
+        const sessions = m.getActiveSessions();
+        if (sessions.length === 0) {
+          console.log("No active paired sessions.");
+        } else {
+          console.log(`Found ${sessions.length} active paired device(s):`);
+          sessions.forEach((s, idx) => {
+            console.log(`[${idx + 1}] ID: ${s.id} | Name: ${s.clientName} | IP: ${s.ip} | Created: ${s.createdAt} | Last Used: ${s.lastUsedAt}`);
+          });
+        }
+      });
+    '
+}
+
 case "$1" in
     start)
         start_dashboard
@@ -112,8 +165,17 @@ case "$1" in
     status)
         status_dashboard
         ;;
+    pair)
+        pair_device "$2"
+        ;;
+    unpair-all)
+        unpair_all_devices
+        ;;
+    sessions)
+        list_sessions
+        ;;
     *)
-        echo "Usage: ./run.sh {start|stop|restart|status}"
+        echo "Usage: ./run.sh {start|stop|restart|status|pair [pin]|unpair-all|sessions}"
         exit 1
         ;;
 esac

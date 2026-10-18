@@ -16,6 +16,36 @@
 </head>
 <body>
   <div id="app-container">
+    <!-- Full-Screen Glassmorphic Pairing Overlay -->
+    <div class="pairing-overlay" id="pairing-overlay" style="display: none;">
+      <div class="pairing-card">
+        <div class="pairing-brand">
+          <img src="/icon.svg" alt="Antigravity" class="pairing-logo">
+          <div class="pairing-title">Antigravity Remote</div>
+        </div>
+        <p class="pairing-subtitle">Pair this mobile device with your Mac workstation to control Antigravity securely.</p>
+
+        <div class="pin-display-box">
+          <div class="pin-label">ONE-TIME PAIRING PIN</div>
+          <div class="pin-value" id="display-pin">--- ---</div>
+          <div class="pin-status">
+            <span class="pin-pulse-dot"></span>
+            <span id="pin-status-text">Awaiting approval on your Mac...</span>
+          </div>
+        </div>
+
+        <div class="pairing-steps">
+          <div class="pairing-step"><span>1</span> Check your Mac screen for the authorization prompt</div>
+          <div class="pairing-step"><span>2</span> Click <b>"Approve"</b> on your computer</div>
+          <div class="pairing-step"><span>3</span> This mobile remote will unlock instantly</div>
+        </div>
+
+        <button class="btn btn-edit" style="width: 100%; margin-top: 14px; justify-content: center;" onclick="initiatePairing()">
+          <span>🔄 Request New PIN</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Glassmorphism Top Header -->
     <header>
       <div class="brand">
@@ -150,6 +180,20 @@
               <div>• <b>Caffeinate:</b> <span id="sys-caff" style="color: var(--success);">Active (Sleep Prevented)</span></div>
               <div>• <b>Git Branch:</b> <span id="sys-git" style="color: var(--accent-primary);">main</span></div>
             </div>
+          </div>
+
+          <div class="plan-header-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <h3 style="margin: 0;">Security & Device Pairing</h3>
+              <span class="plan-status-badge badge-completed" id="sys-auth-badge">PAIRED</span>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+              <div>• <b>Status:</b> <span style="color: var(--success);">Cryptographically Authorized</span></div>
+              <div>• <b>Mac Handshake:</b> <span>Host Approved</span></div>
+            </div>
+            <button class="btn btn-cancel" style="width: 100%; margin-top: 10px; justify-content: center; font-size: 0.85rem; padding: 10px;" onclick="unpairDevice()">
+              <span>🔒 Disconnect & Unpair Device</span>
+            </button>
           </div>
 
           <div class="plan-header-card">

@@ -49,15 +49,52 @@ function scrollToBottom() {
   if (main) main.scrollTop = main.scrollHeight;
 }
 
+// ==========================================
+// Authentication & Device Pairing Storage
+// ==========================================
+const AUTH_STORAGE_KEY = "ag_remote_token";
+
+function getAuthToken() {
+  return localStorage.getItem(AUTH_STORAGE_KEY);
+}
+
+function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem(AUTH_STORAGE_KEY, token);
+  } else {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  }
+}
+
+async function authFetch(url, options = {}) {
+  const token = getAuthToken();
+  const headers = Object.assign({}, options.headers || {});
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  options.headers = headers;
+
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    console.warn("Received 401 Unauthorized. Showing pairing screen...");
+    setAuthToken(null);
+    showPairingOverlay();
+    initiatePairing();
+  }
+  return res;
+}
+
 // SSE Live Stream Connection
 let sseSource = null;
 function initSSE() {
   if (sseSource) sseSource.close();
 
+  const token = getAuthToken();
   statusDot.className = "status-dot";
   connText.textContent = "Connecting...";
 
-  sseSource = new EventSource("/events");
+  const sseUrl = token ? `/events?token=${encodeURIComponent(token)}` : "/events";
+  sseSource = new EventSource(sseUrl);
 
   sseSource.addEventListener("connected", () => {
     statusDot.className = "status-dot connected";
@@ -103,7 +140,7 @@ function initSSE() {
 // Fetch Full State from Server
 async function fetchState() {
   try {
-    const res = await fetch("/api/state");
+    const res = await authFetch("/api/state");
     const data = await res.json();
     if (data.ok) {
       appState = data;
@@ -173,7 +210,7 @@ async function handleSendPrompt(e) {
   sendBtn.disabled = true;
 
   try {
-    const res = await fetch("/api/prompt", {
+    const res = await authFetch("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: text })
@@ -257,7 +294,7 @@ async function submitDecision(value, isApproval) {
   decisionBanner.classList.remove("active");
 
   try {
-    await fetch("/api/decision", {
+    await authFetch("/api/decision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ value, isApproval })
@@ -347,7 +384,7 @@ async function handlePlanAction(action) {
   }
 
   try {
-    const res = await fetch("/api/plan/action", {
+    const res = await authFetch("/api/plan/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action })
@@ -392,7 +429,7 @@ async function submitRevisionComment() {
   document.getElementById("revision-textarea").value = "";
 
   try {
-    const res = await fetch("/api/plan/action", {
+    const res = await authFetch("/api/plan/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "comment", comment })
@@ -545,7 +582,7 @@ async function selectWorkspace(id) {
   closeWorkspaceModal();
 
   try {
-    const res = await fetch("/api/workspaces/select", {
+    const res = await authFetch("/api/workspaces/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id })
@@ -578,7 +615,7 @@ async function handleAddWorkspace(e) {
   if (navigator.vibrate) navigator.vibrate(25);
 
   try {
-    const res = await fetch("/api/workspaces/add", {
+    const res = await authFetch("/api/workspaces/add", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: wsPath, name: name || undefined })
@@ -618,8 +655,125 @@ function renderSystemView() {
   }
 }
 
+// ==========================================
+// Device Pairing UI & Flow Management
+// ==========================================
+let currentPairingId = null;
+let pairingPollInterval = null;
+
+function showPairingOverlay() {
+  const overlay = document.getElementById("pairing-overlay");
+  if (overlay) overlay.style.display = "flex";
+}
+
+function hidePairingOverlay() {
+  const overlay = document.getElementById("pairing-overlay");
+  if (overlay) overlay.style.display = "none";
+  if (pairingPollInterval) {
+    clearInterval(pairingPollInterval);
+    pairingPollInterval = null;
+  }
+}
+
+async function initiatePairing() {
+  if (pairingPollInterval) {
+    clearInterval(pairingPollInterval);
+    pairingPollInterval = null;
+  }
+  showPairingOverlay();
+  const pinEl = document.getElementById("display-pin");
+  const statusEl = document.getElementById("pin-status-text");
+  if (pinEl) pinEl.textContent = "--- ---";
+  if (statusEl) statusEl.textContent = "Generating pairing request...";
+
+  try {
+    const res = await fetch("/api/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientName: `Mobile Device (${navigator.platform || "Web"})`
+      })
+    });
+    const data = await res.json();
+    if (data.ok && data.pin) {
+      currentPairingId = data.pairId;
+      if (pinEl) pinEl.textContent = data.pin;
+      if (statusEl) statusEl.textContent = "Awaiting approval on your Mac workstation...";
+
+      // Poll verification endpoint every 2 seconds
+      pairingPollInterval = setInterval(async () => {
+        try {
+          const vRes = await fetch("/api/auth/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pairId: currentPairingId })
+          });
+          const vData = await vRes.json();
+          if (vRes.status === 200 && vData.ok && vData.token) {
+            clearInterval(pairingPollInterval);
+            pairingPollInterval = null;
+            setAuthToken(vData.token);
+            if (statusEl) statusEl.textContent = "✅ Paired successfully!";
+            if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
+            setTimeout(() => {
+              hidePairingOverlay();
+              initSSE();
+              fetchState();
+            }, 700);
+          } else if (vRes.status === 400 || (vRes.status !== 202 && !vData.pending)) {
+            clearInterval(pairingPollInterval);
+            pairingPollInterval = null;
+            if (statusEl) statusEl.textContent = "⚠️ PIN expired or cancelled. Tap below to retry.";
+          }
+        } catch (pollErr) {
+          console.error("Verification poll error:", pollErr);
+        }
+      }, 2000);
+    } else {
+      if (statusEl) statusEl.textContent = "⚠️ Failed to generate PIN: " + (data.error || "Unknown error");
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "⚠️ Connection error: " + err.message;
+  }
+}
+
+async function checkAuthAndInit() {
+  try {
+    const res = await authFetch("/api/auth/status");
+    const data = await res.json();
+    if (data.ok && (data.authenticated || data.authDisabled)) {
+      hidePairingOverlay();
+      initSSE();
+      fetchState();
+    } else {
+      setAuthToken(null);
+      showPairingOverlay();
+      initiatePairing();
+    }
+  } catch (err) {
+    console.warn("Auth check failed, prompting pairing:", err);
+    showPairingOverlay();
+    initiatePairing();
+  }
+}
+
+async function unpairDevice() {
+  if (!confirm("Are you sure you want to disconnect and unpair this mobile device?")) {
+    return;
+  }
+  if (navigator.vibrate) navigator.vibrate(30);
+
+  try {
+    await authFetch("/api/auth/revoke", { method: "POST" });
+  } catch (_) {}
+
+  setAuthToken(null);
+  if (sseSource) sseSource.close();
+  showPairingOverlay();
+  initiatePairing();
+}
+
 // Initialize on Load
 window.addEventListener("DOMContentLoaded", () => {
-  initSSE();
-  fetchState();
+  checkAuthAndInit();
 });

@@ -6,5 +6,6 @@ bridge_state.json
 decisions.json
 bridge_conversations.json
 workspaces.json
+auth_store.json
 scratch/
 .DS_Store
